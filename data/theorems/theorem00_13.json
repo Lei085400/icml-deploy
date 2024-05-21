@@ -198,13 +198,13 @@
     ]
   },
   {
-    "theorem": "theorem0",
+    "theorem": "theorem0",   
     "type": "$p",
     "conclusion": "|- ph",
     "d_vars": "",
     "f_hypos": [
-      "wff ph",
-      "wff ps"
+      "wff ps",
+      "wff ph"
     ],
     "e_hypos": [
       "|- ps",
