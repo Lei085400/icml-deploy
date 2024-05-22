@@ -42,34 +42,29 @@ def encode_tactic(tactic,feature_size):
 
 
 def tactic_generator(axiom_file,symbol_file):
-  # tactic_candidates = ['wp',
-  #                      'wr',
-  #                      'ws',
-  #                      'wq',
-  #                      'w2',
-  #                      ]
+
   tactic_candidates = []
-  
   with open(symbol_file, 'r') as f:
     for line in f:
         # 解析 JSON 对象并添加到列表中
         json_data = json.loads(line)
         tactic_candidates.append(json_data["theorem"])
-        
+  
+  count = 0
   with open(axiom_file, 'r') as f:
     for line in f:
+      if(count <= 21):
+        count += 1
         # 解析 JSON 对象并添加到列表中
         json_data = json.loads(line)
         tactic_candidates.append(json_data["theorem"])  
   # print("___")
   # print(tactic_candidates)
 
-  tac1 = "vx.cv"
-  tac2 = "vx.tru"
-  if tac1 in tactic_candidates:
-    tactic_candidates.remove(tac1)
-  if tac2 in tactic_candidates:
-    tactic_candidates.remove(tac2)
+  tac = ["vx.cv","vx.tru"]
+  for t in tac:
+    if t in tactic_candidates:
+      tactic_candidates.remove(t)
   return tactic_candidates
 
 ##############和mm交互：
@@ -170,6 +165,67 @@ def assertion_trans_to_same_v(
         return new_assertion  
 
 
+def assertion_proof_trans_to_same_v(
+        mm,
+        assertion: Assertion,   # 新断言
+        proof: list,     # 得到当前断言的证明序列
+        symbol_dict: dict  # 读文件symbols.json之后产生的符号字典
+        ) -> tuple[Assertion, list]:
+        """将生成的新定理做和当前证明步骤 做变量替换，并返回替换后的结果
+        
+        """ 
+        symbols = ['wph','wps','wch','wth','wta','wet','wze','wsi','wrh','wmu','wla',
+                   'wka','vx.wal','vx.cv','cA.wceq','cB.wceq','vx.tru','vy.tru']
+        new_assertion = copy.deepcopy(assertion)
+        dvs = new_assertion[0]
+        f_hyps = new_assertion[1]
+        e_hyps = new_assertion[2]
+        new_conclusion = new_assertion[3]
+        new_proof = [] # 替换证明步骤
+        i = 0
+        fhs_v = [] # 存需要被替换的$v
+        labels_p = []  # 需要被替换的标签
+        label_dict = {}  # 替换标签字典
+        # 思路：应该用一个字典？对应原本assertion的label 对应的是替换后的新label
+
+        new_f_hyps = []
+        new_e_hyps = []
+        for fh in f_hyps:
+            fhs_v.append(fh[1])  # 需要被替换的v
+            fh_stmt = str('$f'),list(fh)
+            label_p = list(mm.labels.keys())[list(mm.labels.values()).index(fh_stmt)] 
+            labels_p.append(label_p)  # 需要被替换的证明步骤
+            label_dict[label_p] = symbol_dict[symbols[i]]
+            new_f_hyps.append(symbol_dict[symbols[i]])
+            i += 1
+        # 替换e_hyps和conclusion
+        for eh in e_hyps:
+            new_eh = eh
+            for i, fh_v in enumerate(fhs_v):
+                new_eh = new_eh.replace(fh_v, symbol_dict[symbols[i]][1])
+            #当前eh替换完成
+            new_e_hyps.append(new_eh)
+        for i, ch in enumerate(new_conclusion):
+            if ch in fhs_v:
+                for j, fh_v in enumerate(fhs_v):
+                    if ch == fh_v:
+                        new_conclusion[i] = new_f_hyps[j][1]  
+
+        for i,step in enumerate(proof):
+            if step in labels_p:
+                new_step = list(symbol_dict.keys())[list(symbol_dict.values()).index(label_dict[step])] 
+                new_proof.append(new_step)
+            else:
+                new_proof.append(proof[i])
+
+        new_assertion = dvs,new_f_hyps,new_e_hyps,new_conclusion
+        # print('[ assertion_trans_to_same_v]:',new_assertion, new_proof)
+        #  $a 类型的证明步骤中的标签不用替换，因为mcts 引用的 $a 都是已有的公理集中的标签 
+        return new_assertion,new_proof  
+
+
+
+
 def is_new_assertion(
         assertion:Assertion,
         assertions:list[Assertion],  # 当前已有的assertion列表
@@ -200,6 +256,7 @@ def generate_theorem(node,name,assertion_labels):
   f_hypos = [" ".join(pair) for pair in node.assersion[1]]
   e_hypos = [" ".join(pair) for pair in node.assersion[2]]
   conclusion = " ".join(node.assersion[3])
+  # conclusion = conclusion.replace('wff', '|-')
   proof_steps = " ".join(node.path)
   for i in node.path:
     if i in assertion_labels:
@@ -215,15 +272,15 @@ def new_theorem(node, mm, assersions,assertion_labels,symbol_dict):
   if node.tac in assertion_labels:
     if(node.parent is None or node.flag == False):
       return False
-    elif(len(node.state) == 1 + len(node.parent.state)):
-      return False   #未生成新定理
+    # elif(len(node.state) == 1 + len(node.parent.state)):
+    #   return False   #未生成新定理
     else:
       # return True
       new_conclusion = node.state[-1]
       new_assersion = mm.fs.make_assertion(new_conclusion) # 获取疑似新结论的完整assertion
-      
+      node.assersion = new_assersion
       trans_assersion, new_assertion_flag = is_new_assertion(new_assersion,assersions,symbol_dict)
-      node.assersion = trans_assersion
+      
       if not new_assertion_flag:# 不属于新定理
           # print('It is not new theorem')
           return False
@@ -450,7 +507,7 @@ class MCTS:
           # C = 1
           # C = 2
         else:
-          C = 0.03
+          C = 1 / math.sqrt(2.0)
 
         # UCB = quality / times + C * sqrt(2 * ln(total_times) / times)
         left = sub_node.get_quality_value() / sub_node.get_visit_times()
@@ -554,7 +611,7 @@ class MCTS:
     def runmcts(self, mm, f_hyps, e_hyps, axiom_file,symbol_file):
      
       node =  self.node
-      computation_budget = 10000
+      computation_budget = 2700
       assersions,assertion_labels = read_axioms_json(axiom_file) # 获取已有公理的assertion list
       symbol_dict = read_symbols_json(symbol_file)  #获取符号字典
       outputs = []
@@ -590,30 +647,18 @@ class MCTS:
             path.append(new_node.tac)
             new_node = new_node.parent
           path.reverse()
-          expand_node.path = path
+          
+          trans_assertion,trans_proof = assertion_proof_trans_to_same_v(mm,expand_node.assersion,path,symbol_dict)
+          
+          expand_node.path = trans_proof
+          expand_node.assersion = trans_assertion
           
           new_theorem = generate_theorem(expand_node,name+str(i),assertion_labels)
           outputs.append(new_theorem)
-          
-          # # print(new_theorem)
-          # with open('out.json', 'a') as file:
-          #   json.dump(new_theorem, file)
-          #   file.write('\n')
           # print(new_theorem)
-          
+          with open('out.json', 'a') as file:
+            json.dump(new_theorem, file)
+            file.write('\n')
+          # print(new_theorem)
+
       return outputs
-
-
-
-# def main():
-#   # Create the initialized state and initialized node
-#   init_state = State(state)
-#   node = Node()
-#   node.set_state(init_state)
-#   current_node = node
-#   mcts = MCTS(current_node)
-#   current_node = mcts.run()
-#   print("搜索完成")
-
-# if __name__ == "__main__":
-#   main()
